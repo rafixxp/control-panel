@@ -8,8 +8,10 @@
 #   2. User khusus `nodepanel` (panel TIDAK boleh jalan sebagai root)
 #   3. .env dengan secret acak + build frontend
 #   4. Migrasi database + seed akun admin
-#   5. Sudoers terbatas (nginx/systemctl/certbot)
-#   6. PM2 service + startup, self-signed SSL, UFW (2087/80/443)
+#   5. Nginx: serve frontend (frontend/dist) di port 80 + reverse proxy
+#      /api & /socket.io → 127.0.0.1:2087 (panel bisa dibuka lewat http://<IP>/)
+#   6. Sudoers terbatas (nginx/systemctl/certbot)
+#   7. PM2 service + startup, self-signed SSL, UFW (2087/80/443)
 #
 set -euo pipefail
 
@@ -61,13 +63,37 @@ if [[ ! -f "$PANEL_DIR/backend/.env" ]]; then
   sed -i "s|^PANEL_CRYPTO_KEY=.*|PANEL_CRYPTO_KEY=${CRYPTO_KEY}|"           "$PANEL_DIR/backend/.env"
   sed -i "s|^DATABASE_URL=.*|DATABASE_URL=mysql://nodepanel:${DB_PASSWORD}@127.0.0.1:3306/nodepanel|" "$PANEL_DIR/backend/.env"
   sed -i "s|^NODE_ENV=.*|NODE_ENV=production|"                              "$PANEL_DIR/backend/.env"
-  sed -i "s|^PANEL_URL=.*|PANEL_URL=https://localhost:${PANEL_PORT}|"       "$PANEL_DIR/backend/.env"
+  # PANEL_URL/WEB_ORIGIN di-set pada blok "Origin panel" di bawah.
   sed -i "s|^PANEL_DRY_RUN=.*|PANEL_DRY_RUN=|"                              "$PANEL_DIR/backend/.env"
   chmod 600 "$PANEL_DIR/backend/.env"
 fi
 # .env dibuat oleh root di atas, padahal build & seed dijalankan sebagai $PANEL_USER
 chown "$PANEL_USER":"$PANEL_USER" "$PANEL_DIR/backend/.env"
 chmod 600 "$PANEL_DIR/backend/.env"
+
+# Origin panel dipakai untuk CORS (WEB_ORIGIN) dan link (PANEL_URL).
+# Nginx menyajikan frontend pada origin yang sama dengan API, jadi keduanya
+# harus menunjuk ke alamat yang benar-benar dipakai browser.
+# Override bila pakai domain: sudo PANEL_URL=https://panel.example.com ./scripts/install.sh
+if [[ -z "${PANEL_URL:-}" ]]; then
+  SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ -z "$SERVER_IP" ]]; then
+    SERVER_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") print $(i+1)}' | head -n1)"
+  fi
+  PANEL_URL="http://${SERVER_IP:-127.0.0.1}"
+fi
+WEB_ORIGIN="${WEB_ORIGIN:-$PANEL_URL}"
+
+set_env() { # set_env KEY VALUE FILE — update baris KEY= atau tambahkan bila belum ada
+  if grep -qE "^$1=" "$3"; then
+    sed -i "s|^$1=.*|$1=$2|" "$3"
+  else
+    printf '%s=%s\n' "$1" "$2" >>"$3"
+  fi
+}
+set_env PANEL_URL   "$PANEL_URL"  "$PANEL_DIR/backend/.env"
+set_env WEB_ORIGIN  "$WEB_ORIGIN" "$PANEL_DIR/backend/.env"
+set_env TRUST_PROXY 1             "$PANEL_DIR/backend/.env"   # panel di belakang nginx
 
 # ---------------------------------------------------------------- 4. Database
 log "Menyiapkan MySQL (bind 127.0.0.1, db nodepanel)..."
@@ -100,7 +126,72 @@ fi
 sudo -u "$PANEL_USER" bash -lc "cd $PANEL_DIR/backend  && npm install --no-audit --no-fund && $DB_SETUP && npm run seed"
 sudo -u "$PANEL_USER" bash -lc "cd $PANEL_DIR/frontend && npm install --no-audit --no-fund && npm run build"
 
-# ---------------------------------------------------------------- 6. Sudoers
+# ---------------------------------------------------------------- 6. Frontend (Nginx)
+# Port 2087 tetap API saja (Fastify). Nginx menyajikan hasil build di port 80
+# dan meneruskan /api + /socket.io ke backend, jadi frontend dan API
+# berasal dari origin yang sama (CORS & cookie refresh langsung cocok).
+log "Menulis vhost Nginx (serve frontend/dist + proxy → 127.0.0.1:${PANEL_PORT})..."
+cat > /etc/nginx/sites-available/nodepanel <<NGINX_CONF
+# NodePanel — frontend Vue (Vite build) + reverse proxy ke Fastify :${PANEL_PORT}
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    root ${PANEL_DIR}/frontend/dist;
+    index index.html;
+
+    client_max_body_size 100m;        # samakan dengan MAX_UPLOAD_MB
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # ---- Backend (API) ----
+    location /api {
+        proxy_pass http://127.0.0.1:${PANEL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # ---- Socket.io (realtime dashboard) ----
+    location /socket.io {
+        proxy_pass http://127.0.0.1:${PANEL_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 90s;
+    }
+
+    # ---- Asset build (nama file ber-hash) boleh di-cache ----
+    location /assets/ {
+        try_files \$uri =404;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    # ---- SPA fallback (vue-router history mode) ----
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+NGINX_CONF
+
+# Halaman selamat datang bawaan Ubuntu memakai port 80 juga — nonaktifkan.
+ln -sfn /etc/nginx/sites-available/nodepanel /etc/nginx/sites-enabled/nodepanel
+rm -f /etc/nginx/sites-enabled/default
+
+nginx -t
+systemctl enable nginx >/dev/null 2>&1 || true
+systemctl reload nginx || systemctl restart nginx
+
+# ---------------------------------------------------------------- 7. Sudoers
 log "Menulis sudoers terbatas..."
 cat > /etc/sudoers.d/nodepanel <<'EOF'
 # NodePanel — hanya perintah yang dibutuhkan panel
@@ -109,7 +200,7 @@ EOF
 chmod 440 /etc/sudoers.d/nodepanel
 visudo -cf /etc/sudoers.d/nodepanel >/dev/null
 
-# ---------------------------------------------------------------- 7. PM2
+# ---------------------------------------------------------------- 8. PM2
 log "Menjalankan panel dengan PM2..."
 sudo -u "$PANEL_USER" PM2_HOME="/home/$PANEL_USER/.pm2" pm2 delete nodepanel 2>/dev/null || true
 sudo -u "$PANEL_USER" PM2_HOME="/home/$PANEL_USER/.pm2" \
@@ -117,7 +208,7 @@ sudo -u "$PANEL_USER" PM2_HOME="/home/$PANEL_USER/.pm2" \
 sudo -u "$PANEL_USER" PM2_HOME="/home/$PANEL_USER/.pm2" pm2 save
 sudo -u "$PANEL_USER" PM2_HOME="/home/$PANEL_USER/.pm2" pm2 startup systemd -u "$PANEL_USER" --hp "/home/$PANEL_USER" >/dev/null || true
 
-# ---------------------------------------------------------------- 8. SSL self-signed
+# ---------------------------------------------------------------- 9. SSL self-signed
 SSL_DIR="/etc/nodepanel/ssl"
 if [[ ! -f "$SSL_DIR/fullchain.pem" ]]; then
   log "Membuat sertifikat self-signed untuk panel..."
@@ -127,7 +218,7 @@ if [[ ! -f "$SSL_DIR/fullchain.pem" ]]; then
     -subj "/CN=nodepanel.local/O=NodePanel" 2>/dev/null
 fi
 
-# ---------------------------------------------------------------- 9. Firewall
+# ---------------------------------------------------------------- 10. Firewall
 log "Mengonfigurasi UFW (2087, 80, 443)..."
 ufw --force default deny incoming >/dev/null
 ufw --force default allow outgoing >/dev/null
@@ -139,8 +230,9 @@ ufw --force enable >/dev/null
 
 log "Selesai."
 echo
-echo "  Panel      : http://<IP-server>:${PANEL_PORT}"
-echo "  Health     : curl -s http://127.0.0.1:${PANEL_PORT}/api/health"
+echo "  Panel      : ${PANEL_URL}/                    (frontend Vue via Nginx, port 80)"
+echo "  Health     : curl -s ${PANEL_URL}/api/health   (di-proxy ke 127.0.0.1:${PANEL_PORT})"
+echo "  API langsung: curl -s http://127.0.0.1:${PANEL_PORT}/api/health"
 echo "  Logs       : pm2 logs nodepanel"
 echo "  Env        : $PANEL_DIR/backend/.env   (password admin ada di hasil seed)"
 echo
