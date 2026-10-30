@@ -4,13 +4,15 @@
  * Port default 2087 (non-standar, sesuai panduan keamanan).
  */
 import 'dotenv/config';
-import { pathToFileURL } from 'node:url';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
+import fastifyStatic from '@fastify/static';
 
 import { env } from './src/config/env.js';
 import { closeDatabase } from './src/config/database.js';
@@ -26,6 +28,10 @@ import dashboardRoutes from './src/routes/dashboard.routes.js';
 import domainRoutes from './src/routes/domain.routes.js';
 import sslRoutes from './src/routes/ssl.routes.js';
 import fileRoutes from './src/routes/files.routes.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const frontendDistRoot = path.resolve(__dirname, '../frontend/dist');
 
 export async function buildApp() {
   const app = Fastify({
@@ -78,6 +84,15 @@ export async function buildApp() {
     limits: { fileSize: env.maxUploadMb * 1024 * 1024, files: 10 },
   });
 
+  await app.register(fastifyStatic, {
+    root: frontendDistRoot,
+    prefix: '/',
+    index: 'index.html',
+    wildcard: false,
+    list: false,
+    decorateReply: true,
+  });
+
   // ---- Decorators dipakai semua route ----
   app.decorate('authenticate', authenticate);
   app.decorate('authorize', authorize);
@@ -115,7 +130,23 @@ export async function buildApp() {
   await app.register(fileRoutes, { prefix: '/api/files' });
 
   app.setNotFoundHandler((request, reply) => {
-    reply.code(404).send({ error: 'not_found', message: `Route ${request.method} ${request.url} tidak ditemukan.` });
+    const url = request.raw.url || '/';
+
+    if (url.startsWith('/api/')) {
+      return reply.code(404).send({
+        error: 'not_found',
+        message: `Route ${request.method} ${request.url} tidak ditemukan.`,
+      });
+    }
+
+    if (!url.startsWith('/api')) {
+      return reply.sendFile('index.html', frontendDistRoot);
+    }
+
+    return reply.code(404).send({
+      error: 'not_found',
+      message: `Route ${request.method} ${request.url} tidak ditemukan.`,
+    });
   });
 
   attachSocket(app);
