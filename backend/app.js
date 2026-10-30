@@ -122,7 +122,12 @@ export async function buildApp() {
   return app;
 }
 
-const isMain = Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);
+// Deteksi entry point harus tahan terhadap wrapper: PM2 menjalankan skrip
+// lewat lib/ProcessContainerFork.js, sehingga process.argv[1] menunjuk ke
+// wrapper PM2 dan bukan ke file ini. PM2 menyediakan jalur skrip asli lewat
+// pm_exec_path, jadi periksa keduanya.
+const entryPoints = [process.argv[1], process.env.pm_exec_path].filter(Boolean);
+const isMain = entryPoints.some((entry) => import.meta.url === pathToFileURL(entry).href);
 
 if (isMain) {
   const app = await buildApp();
