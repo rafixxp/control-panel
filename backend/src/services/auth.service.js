@@ -65,7 +65,10 @@ async function createSession(user, { ip, userAgent }) {
 export function refreshCookieOptions(maxAgeMs) {
   return {
     httpOnly: true,
-    secure: env.isProd,
+    // `Secure` hanya bila origin panel benar-benar HTTPS: browser menolak
+    // cookie Secure yang di-set lewat http:// (Nginx port 80 tanpa TLS),
+    // sehingga sesi refresh hilang tiap kali halaman dimuat ulang.
+    secure: env.isProd && env.panelUrl.startsWith('https://'),
     sameSite: 'strict',
     path: '/api/auth',
     maxAge: maxAgeMs,
