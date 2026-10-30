@@ -1,0 +1,128 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   NodePanel design system — dark-first
+   Sumber: master prompt (palet warna, tipografi, radius)
+   ============================================================ */
+@theme {
+  --color-bg-base: #0f1117;
+  --color-bg-surface: #161b27;
+  --color-bg-elevated: #1e2435;
+  --color-border: #2a3147;
+  --color-accent: #4f8ef7;
+  --color-accent-glow: #4f8ef720;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-text-primary: #e8ecf4;
+  --color-text-muted: #8892a4;
+
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --radius-card: 8px;
+  --radius-btn: 6px;
+  --radius-badge: 4px;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-accent-glow);
+}
+
+/* Scrollbar tipis agar konsisten dengan border subtle */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+/* Angka statistik selalu monospace */
+.stat-number {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Subtle glassmorphism untuk kartu statistik utama */
+.glass-card {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.025), transparent 60%),
+    var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+}
+
+/* Status dot berdenyut untuk service yang running */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.status-dot-running {
+  background: var(--color-success);
+  box-shadow: 0 0 0 0 rgb(52 211 153 / 0.6);
+  animation: pulse-dot 2s infinite;
+}
+
+.status-dot-stopped {
+  background: var(--color-danger);
+}
+
+.status-dot-unknown {
+  background: var(--color-text-muted);
+}
+
+@keyframes pulse-dot {
+  0% {
+    box-shadow: 0 0 0 0 rgb(52 211 153 / 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgb(52 211 153 / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(52 211 153 / 0);
+  }
+}
+
+/* Input field konsisten */
+.field-input {
+  width: 100%;
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-btn);
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text-primary);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.field-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-glow);
+}
+
+.field-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.code-area {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+}

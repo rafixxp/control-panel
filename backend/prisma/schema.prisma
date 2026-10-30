@@ -1,0 +1,129 @@
+// NodePanel — database schema (MySQL 8)
+// Master reference: docs/hosting-panel-master-prompt.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               Int         @id @default(autoincrement())
+  name             String
+  email            String      @unique
+  password         String
+  role             Role        @default(OPERATOR)
+  twoFactorSecret  String?
+  twoFactorEnabled Boolean     @default(false)
+  isActive         Boolean     @default(true)
+  lastLogin        DateTime?
+  lastLoginIp      String?
+  createdAt        DateTime    @default(now())
+  sessions         Session[]
+  auditLogs        AuditLog[]
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       Int
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String   @unique
+  ipAddress    String
+  userAgent    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Domain {
+  id           Int         @id @default(autoincrement())
+  name         String      @unique
+  documentRoot String
+  phpVersion   String      @default("8.2")
+  isSuspended  Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+  ssl          SSL?
+  subdomains   Subdomain[]
+  databases    Database[]
+}
+
+model Subdomain {
+  id           Int      @id @default(autoincrement())
+  name         String
+  domainId     Int
+  domain       Domain   @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  documentRoot String
+  createdAt    DateTime @default(now())
+
+  @@unique([domainId, name])
+}
+
+model SSL {
+  id        Int       @id @default(autoincrement())
+  domainId  Int       @unique
+  domain    Domain    @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  issuer    String // "letsencrypt" | "self-signed" | "custom"
+  status    String // "active" | "expired" | "pending"
+  expiresAt DateTime?
+  autoRenew Boolean   @default(true)
+  createdAt DateTime  @default(now())
+}
+
+model Database {
+  id        Int            @id @default(autoincrement())
+  name      String         @unique
+  domainId  Int?
+  domain    Domain?        @relation(fields: [domainId], references: [id], onDelete: SetNull)
+  charset   String         @default("utf8mb4")
+  collation String         @default("utf8mb4_unicode_ci")
+  sizeBytes BigInt?
+  createdAt DateTime       @default(now())
+  dbUsers   DatabaseUser[]
+}
+
+model DatabaseUser {
+  id         Int      @id @default(autoincrement())
+  username   String   @unique
+  password   String
+  host       String   @default("%")
+  privileges Json?
+  databaseId Int
+  database   Database @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String // "CREATE_DOMAIN", "DELETE_FILE", "LOGIN", ...
+  resource  String // "domain:example.com", "file:/var/www/..."
+  ipAddress String
+  userAgent String?
+  status    String // "success" | "failed"
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  type      String // "ssl_expire", "high_cpu", "login_anomaly"
+  title     String
+  message   String
+  severity  String // "info" | "warning" | "danger"
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  OPERATOR
+}

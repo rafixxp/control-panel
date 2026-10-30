@@ -1,0 +1,28 @@
+# Dependencies & build output
+node_modules/
+frontend/dist/
+backend/prisma/*.db
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.dev.vars
+*.pem
+*.key
+
+# Logs & runtime data
+logs/
+*.log
+data/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Docker volumes
+mysql-data/
+redis-data/
