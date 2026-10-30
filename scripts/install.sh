@@ -65,6 +65,9 @@ if [[ ! -f "$PANEL_DIR/backend/.env" ]]; then
   sed -i "s|^PANEL_DRY_RUN=.*|PANEL_DRY_RUN=|"                              "$PANEL_DIR/backend/.env"
   chmod 600 "$PANEL_DIR/backend/.env"
 fi
+# .env dibuat oleh root di atas, padahal build & seed dijalankan sebagai $PANEL_USER
+chown "$PANEL_USER":"$PANEL_USER" "$PANEL_DIR/backend/.env"
+chmod 600 "$PANEL_DIR/backend/.env"
 
 # ---------------------------------------------------------------- 4. Database
 log "Menyiapkan MySQL (bind 127.0.0.1, db nodepanel)..."
@@ -85,7 +88,16 @@ fi
 
 # ---------------------------------------------------------------- 5. Build & migrate
 log "Instalasi dependensi & build..."
-sudo -u "$PANEL_USER" bash -lc "cd $PANEL_DIR/backend  && npm install --no-audit --no-fund && npx prisma migrate deploy && npm run seed"
+# Repo ini tidak menyertakan prisma/migrations, jadi `migrate deploy` tidak
+# membuat tabel apa pun dan seed gagal (table `User` does not exist).
+# Pakai mekanisme yang sesuai: migration bila ada, kalau tidak `db push`.
+if [[ -d "$PANEL_DIR/backend/prisma/migrations" ]]; then
+  DB_SETUP="npx prisma migrate deploy"
+else
+  log "Tidak ada prisma/migrations — menyinkronkan skema dengan prisma db push..."
+  DB_SETUP="npx prisma db push"
+fi
+sudo -u "$PANEL_USER" bash -lc "cd $PANEL_DIR/backend  && npm install --no-audit --no-fund && $DB_SETUP && npm run seed"
 sudo -u "$PANEL_USER" bash -lc "cd $PANEL_DIR/frontend && npm install --no-audit --no-fund && npm run build"
 
 # ---------------------------------------------------------------- 6. Sudoers
